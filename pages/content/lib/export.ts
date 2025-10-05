@@ -63,7 +63,7 @@ function parseRow(name: string, value?: string) {
     for (const format of dateFormats) {
       const parsedDate = parse(normalizedValue, format, new Date());
       if (isValid(parsedDate)) {
-        return { date: parsedDate.toISOString() };
+        return { date: parsedDate.toISOString().split('T')[0] };
       }
     }
     
