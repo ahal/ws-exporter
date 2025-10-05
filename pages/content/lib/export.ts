@@ -162,7 +162,20 @@ function processTransactionDetails(element: Element): ParsedTransactions[number]
     if (row.children.length !== 2 || !row.children[0].textContent) {
       continue;
     }
-    rowData = { ...rowData, ...parseRow(row.children[0].textContent, row.children[1].textContent ?? undefined) };
+    
+    // Extract only the first text node or first child's text to avoid concatenating nested elements
+    const valueElement = row.children[1];
+    let value: string | undefined;
+    
+    // If the element has child elements, get only the first child's text
+    if (valueElement.children.length > 0) {
+      value = valueElement.children[0].textContent ?? undefined;
+    } else {
+      // Otherwise use the direct text content
+      value = valueElement.textContent ?? undefined;
+    }
+    
+    rowData = { ...rowData, ...parseRow(row.children[0].textContent, value) };
   }
 
   if (Object.keys(rowData).length === 0) {
