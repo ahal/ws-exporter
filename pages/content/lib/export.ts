@@ -14,16 +14,20 @@ type ParsedTransactions = Array<Record<string, number | string | undefined | nul
  */
 function parseRow(name: string, value?: string) {
   const normalizedName = name.toLowerCase();
-  // Assumes 3,000.00 -> 3000.00. Will break for some locales
-  const normalizeAmount = (amount: string) => amount.replace('$', '').replace(',', '').replace('−', '-');
+  
   const parseCurrencyValue = (value: string) => {
-    // Matches: optional sign, optional $, number, optional currency
+    // Matches currency values with optional sign, currency symbol, and ISO code
     // Examples: "− $2.30", "$10.30", "+ $5.00 CAD", "− 20.00 EUR"
-    const match = value.match(/([−-])?\s*\$?([\d.,]+)\s*([A-Z]{3})?/);
-    if (!match) return { amount: null, currency: undefined };
+    const match = value.match(/^([+−-])?\s*\$?([\d,]+(?:\.\d{2})?)\s*([A-Z]{3})?$/);
+    if (!match) {
+      console.warn(`Failed to parse currency value: "${value}"`);
+      return { amount: null, currency: undefined };
+    }
+    
     const sign = match[1] === '−' || match[1] === '-' ? -1 : 1;
     const amount = parseFloat(match[2].replace(',', ''));
-    const currency = match[3] || (value.includes('$') ? 'CAD' : undefined); // fallback if needed
+    const currency = match[3] || undefined; // Explicit currency code required
+    
     return { amount: amount * sign, currency };
   };
   if (normalizedName === 'account') {
@@ -42,25 +46,28 @@ function parseRow(name: string, value?: string) {
     if (!value) {
       return {};
     }
-    // Normalize: replace all whitespace with a space, and ensure space after year
-    let normalizedValue = value
+    
+    // Normalize whitespace and ensure proper formatting
+    const normalizedValue = value
       .replace(/\s+/g, ' ')
       .replace(/(\d{4})\s*(\d)/, '$1 $2')
       .trim();
 
-    let date = parse(normalizedValue, 'MMMM d, yyyy h:mm a', new Date());
-    if (!isValid(date)) {
-      date = parse(normalizedValue, 'MMMM d, yyyyh:mm a', new Date());
+    // Try multiple date formats in order of specificity
+    const dateFormats = [
+      'MMMM d, yyyy h:mm a',   // Standard with space
+      'MMMM d, yyyyh:mm a',    // Legacy without space
+      'MMMM d, yyyy'           // Date only
+    ];
+    
+    for (const format of dateFormats) {
+      const parsedDate = parse(normalizedValue, format, new Date());
+      if (isValid(parsedDate)) {
+        return { date: parsedDate.toISOString() };
+      }
     }
-    if (isValid(date)) {
-      return { date: date.toISOString() };
-    }
-
-    // Try date only
-    const date2 = parse(normalizedValue, 'MMMM d, yyyy', new Date());
-    if (isValid(date2)) {
-      return { date: date2.toISOString() };
-    }
+    
+    console.warn(`Failed to parse date: "${value}"`);
     return {};
   }
   if (normalizedName === 'original amount') {
@@ -68,6 +75,10 @@ function parseRow(name: string, value?: string) {
       return {};
     }
     const parsed = parseCurrencyValue(value);
+    if (parsed.amount === null) {
+      console.warn(`Invalid original amount: "${value}"`);
+      return {};
+    }
     return { originalAmount: parsed.amount, originalCurrency: parsed.currency };
   }
   if (normalizedName === 'exchange rate') {
@@ -81,6 +92,10 @@ function parseRow(name: string, value?: string) {
       return {};
     }
     const parsed = parseCurrencyValue(value);
+    if (parsed.amount === null) {
+      console.warn(`Invalid total/amount: "${value}"`);
+      return {};
+    }
     return { total: parsed.amount, totalCurrency: parsed.currency };
   }
   if (normalizedName.indexOf('spend rewards') > -1) {
@@ -88,7 +103,10 @@ function parseRow(name: string, value?: string) {
       return {};
     }
     const parsed = parseCurrencyValue(value);
-
+    if (parsed.amount === null) {
+      console.warn(`Invalid spend rewards: "${value}"`);
+      return {};
+    }
     return { spendRewards: parsed.amount, spendRewardsCurrency: parsed.currency };
   }
   return {};
