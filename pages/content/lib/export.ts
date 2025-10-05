@@ -109,6 +109,15 @@ function parseRow(name: string, value?: string) {
     }
     return { spendRewards: parsed.amount, spendRewardsCurrency: parsed.currency };
   }
+  if (normalizedName === 'type' || normalizedName === 'transaction type') {
+    return { transactionType: value };
+  }
+  if (normalizedName === 'transaction id' || normalizedName === 'id') {
+    return { transactionId: value };
+  }
+  if (normalizedName === 'message' || normalizedName === 'note') {
+    return { message: value };
+  }
   return {};
 }
 
@@ -185,11 +194,82 @@ function processTransactionDetails(element: Element): ParsedTransactions[number]
   if (!rowData.account && (rowData.to || rowData.from)) {
     rowData = { ...rowData, account: ((rowData.total as number) ?? 0) < 0 ? rowData.from : rowData.to };
   }
+  
+  // Determine the payee based on transaction direction and available fields
+  let payee: string | undefined;
   const description = getTransactionDescription(element);
-  if (description) {
-    rowData = { ...rowData, description };
+  const total = rowData.total as number;
+  
+  // For transfers, use the counterparty (not the account we're viewing)
+  if (rowData.from && rowData.to) {
+    // If we have both from and to, pick the one that's NOT the account
+    if (rowData.account === rowData.from) {
+      payee = String(rowData.to);
+    } else if (rowData.account === rowData.to) {
+      payee = String(rowData.from);
+    } else {
+      // If account doesn't match either, use the opposite of money flow
+      payee = String(total < 0 ? rowData.to : rowData.from);
+    }
+  } else if (rowData.from) {
+    payee = String(rowData.from);
+  } else if (rowData.to) {
+    payee = String(rowData.to);
   }
-  return rowData;
+  
+  // If we still don't have a payee, use the description (for purchases, etc.)
+  if (!payee && description) {
+    payee = description;
+  }
+  
+  // Handle WealthSimple-specific transactions 
+  let wealthsimpleType: string | undefined;
+  if (payee && ['Bonus', 'Interest', 'Cash back'].includes(payee)) {
+    wealthsimpleType = payee;
+    payee = 'WealthSimple';
+  }
+  
+  // Create Notes column with transaction type, ID, message, and rewards
+  let notes: string[] = [];
+  
+  // Add WealthSimple transaction type or regular transaction type and ID
+  if (wealthsimpleType) {
+    notes.push(wealthsimpleType);
+  } else if (rowData.transactionType || rowData.transactionId) {
+    const typeAndId = [
+      rowData.transactionType || '',
+      rowData.transactionId || ''
+    ].filter(Boolean).join(' - ');
+    if (typeAndId) notes.push(typeAndId);
+  }
+  
+  // Add message
+  if (rowData.message) {
+    notes.push(String(rowData.message));
+  }
+  
+  // Add rewards information
+  if (rowData.spendRewards && rowData.spendRewardsCurrency) {
+    notes.push(`earned ${rowData.spendRewards}${rowData.spendRewardsCurrency}`);
+  }
+  
+  // Clean up the rowData to only include needed fields
+  const cleanedData: ParsedTransactions[number] = {
+    status: rowData.status,
+    date: rowData.date,
+    total: rowData.total,
+    totalCurrency: rowData.totalCurrency,
+    account: rowData.account,
+    payee: payee,
+    notes: notes.length > 0 ? notes.join('; ') : undefined,
+  };
+  
+  // Add optional fields if they exist
+  if (rowData.originalAmount) cleanedData.originalAmount = rowData.originalAmount;
+  if (rowData.originalCurrency) cleanedData.originalCurrency = rowData.originalCurrency;
+  if (rowData.exchangeRate) cleanedData.exchangeRate = rowData.exchangeRate;
+  
+  return cleanedData;
 }
 
 function parsedTransactionsToCsv(parsed: ParsedTransactions) {
@@ -200,18 +280,18 @@ function parsedTransactionsToCsv(parsed: ParsedTransactions) {
     return new Date(a.date).getTime() - new Date(b.date).getTime();
   });
 
-  const replacer = (_key: string, value: unknown) => (value === null || value === undefined ? '' : value); // specify how you want to handle null values here
-  const headers = Object.keys(
-    items.reduce(
-      (acc, item) => {
-        Object.keys(item ?? {}).forEach(key => {
-          acc[key] = true;
-        });
-        return acc;
-      },
-      {} as Record<string, boolean>,
-    ),
+  const replacer = (_key: string, value: unknown) => (value === null || value === undefined ? '' : value);
+  
+  // Define fixed header order for better readability
+  const primaryHeaders = ['date', 'payee', 'account', 'total', 'totalCurrency', 'status', 'notes'];
+  const optionalHeaders = ['originalAmount', 'originalCurrency', 'exchangeRate'];
+  
+  // Find which optional headers are actually present in the data
+  const presentOptionalHeaders = optionalHeaders.filter(header => 
+    items.some(item => item && item[header] !== undefined)
   );
+  
+  const headers = [...primaryHeaders, ...presentOptionalHeaders];
 
   const csv = [
     headers.join(','), // header row first
